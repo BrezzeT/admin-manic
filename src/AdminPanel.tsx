@@ -28,11 +28,14 @@ import {
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
-import { collection, query, orderBy, onSnapshot, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, deleteDoc, doc, updateDoc, addDoc, getDocs, where, query as fsQuery } from 'firebase/firestore';
 import { db } from './firebase';
 import { format } from 'date-fns';
 import { uk } from 'date-fns/locale';
 import emailjs from '@emailjs/browser';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import { LocalizationProvider, DatePicker, TimePicker } from '@mui/x-date-pickers';
+import { format as formatDateFns } from 'date-fns';
 
 interface Booking {
   id: string;
@@ -67,6 +70,11 @@ const services = [
   { value: 'xl_kor_dz', label: 'XL (7+) Корекція з дизайном — 700 грн' },
 ];
 
+const isValidDate = (dateStr: string) => {
+  const d = new Date(dateStr);
+  return !isNaN(d.getTime());
+};
+
 const AdminPanel = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -77,6 +85,16 @@ const AdminPanel = () => {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [lastBookingId, setLastBookingId] = useState<string | null>(null);
   const [newBookingSnackbar, setNewBookingSnackbar] = useState<{open: boolean, name: string, date: string} | null>(null);
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [newBooking, setNewBooking] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    service: '',
+    date: null as Date | null,
+    time: null as Date | null,
+    notes: ''
+  });
 
   useEffect(() => {
     const q = query(collection(db, 'bookings'), orderBy('date', 'desc'));
@@ -194,6 +212,40 @@ const AdminPanel = () => {
     }
   };
 
+  const handleAddBooking = async () => {
+    if (!newBooking.name || !newBooking.phone || !newBooking.service || !newBooking.date || !newBooking.time) {
+      setSnackbar({ open: true, message: 'Заповніть всі обовʼязкові поля', severity: 'error' });
+      return;
+    }
+    try {
+      const dateStr = formatDateFns(newBooking.date, 'yyyy-MM-dd');
+      const timeStr = formatDateFns(newBooking.time, 'HH:mm');
+      // Перевірка зайнятості часу
+      const bookingsRef = collection(db, 'bookings');
+      const q = fsQuery(
+        bookingsRef,
+        where('date', '==', dateStr),
+        where('time', '==', timeStr)
+      );
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        setSnackbar({ open: true, message: 'Цей час вже зайнятий', severity: 'error' });
+        return;
+      }
+      await addDoc(collection(db, 'bookings'), {
+        ...newBooking,
+        date: dateStr,
+        time: timeStr,
+        status: 'accepted',
+      });
+      setAddDialogOpen(false);
+      setNewBooking({ name: '', phone: '', email: '', service: '', date: null, time: null, notes: '' });
+      setSnackbar({ open: true, message: 'Запис додано', severity: 'success' });
+    } catch (error) {
+      setSnackbar({ open: true, message: 'Помилка при додаванні запису', severity: 'error' });
+    }
+  };
+
   const renderMobileView = () => (
     <Grid container spacing={2}>
       {bookings.map((booking) => (
@@ -232,7 +284,7 @@ const AdminPanel = () => {
                 Послуга: {services.find(s => s.value === booking.service)?.label || booking.service}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                Дата: {format(new Date(booking.date), 'dd MMMM yyyy', { locale: uk })}
+                Дата: {isValidDate(booking.date) ? format(new Date(booking.date), 'dd MMMM yyyy', { locale: uk }) : booking.date}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                 Час: {booking.time}
@@ -278,6 +330,11 @@ const AdminPanel = () => {
 
   return (
     <div>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+        <Button variant="contained" color="primary" onClick={() => setAddDialogOpen(true)}>
+          Додати запис
+        </Button>
+      </Box>
       {/* Render the mobile view */}
       {renderMobileView()}
       <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
@@ -292,6 +349,70 @@ const AdminPanel = () => {
           <Button onClick={handleDeleteConfirm} color="error" variant="contained">
             Видалити
           </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)}>
+        <DialogTitle>Додати запис</DialogTitle>
+        <DialogContent sx={{ minWidth: 320 }}>
+          <TextField
+            label="Ім'я"
+            value={newBooking.name}
+            onChange={e => setNewBooking({ ...newBooking, name: e.target.value })}
+            fullWidth
+            required
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            label="Телефон"
+            value={newBooking.phone}
+            onChange={e => setNewBooking({ ...newBooking, phone: e.target.value })}
+            fullWidth
+            required
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            label="Email"
+            value={newBooking.email}
+            onChange={e => setNewBooking({ ...newBooking, email: e.target.value })}
+            fullWidth
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            label="Послуга"
+            value={newBooking.service}
+            onChange={e => setNewBooking({ ...newBooking, service: e.target.value })}
+            fullWidth
+            required
+            sx={{ mb: 2 }}
+          />
+          <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={uk}>
+            <DatePicker
+              label="Дата"
+              value={newBooking.date}
+              onChange={date => setNewBooking({ ...newBooking, date })}
+              minDate={new Date()}
+              slotProps={{ textField: { fullWidth: true, required: true, sx: { mb: 2 } } }}
+            />
+            <TimePicker
+              label="Час"
+              value={newBooking.time}
+              onChange={time => setNewBooking({ ...newBooking, time })}
+              slotProps={{ textField: { fullWidth: true, required: true, sx: { mb: 2 } } }}
+            />
+          </LocalizationProvider>
+          <TextField
+            label="Примітки"
+            value={newBooking.notes}
+            onChange={e => setNewBooking({ ...newBooking, notes: e.target.value })}
+            fullWidth
+            multiline
+            rows={2}
+            sx={{ mb: 2 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAddDialogOpen(false)}>Скасувати</Button>
+          <Button onClick={handleAddBooking} variant="contained" color="primary">Додати</Button>
         </DialogActions>
       </Dialog>
       <Snackbar
